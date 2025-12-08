@@ -1,0 +1,38 @@
+========================================
+DATE: 2025-12-03
+========================================
+
+---- YEAR FRAME ----
+Start-Lord: SUN
+Frame: 2025-01-01 08:00 → 2026-01-01 08:00
+
+MAHA  : VENUS    | End: 2026-01-01 08:00 | Rest: 28d 12h 50m | 46.91%
+ANTAR : RAHU     | End: 2025-12-05 23:20 | Rest: 2d 4h 10m | 23.82%
+PRATY : SATURN   | End: 2025-12-04 16:18 | Rest: 0d 21h 8m | 60.97%
+SOOK  : MARS     | End: 2025-12-03 20:04 | Rest: 0d 0h 54m | 45.22%
+SUB   : RAHU     | End: 2025-12-03 19:12 | Rest: 0d 0h 2m | 12.55%
+PRANA : MERCURY  | End: 2025-12-03 19:12 | Rest: 0d 0h 2m | 88.59%
+
+---- MONTH FRAME ----
+Start-Lord: MERCURY
+Frame: 2025-12-01 08:00 → 2026-01-01 08:00
+
+MAHA  : MERCURY  | End: 2025-12-05 17:24 | Rest: 1d 22h 14m | 43.86%
+ANTAR : RAHU     | End: 2025-12-03 19:43 | Rest: 0d 0h 33m |  3.54%
+PRATY : MERCURY  | End: 2025-12-03 19:43 | Rest: 0d 0h 33m | 25.00%
+SOOK  : SATURN   | End: 2025-12-03 19:24 | Rest: 0d 0h 14m | 68.44%
+SUB   : MOON     | End: 2025-12-03 19:10 | Rest: 0d 0h 0m | 51.26%
+PRANA : RAHU     | End: 2025-12-03 19:10 | Rest: 0d 0h 0m | 52.87%
+
+---- WEEK FRAME ----
+Start-Lord: MERCURY
+Frame: 2025-12-01 08:00 → 2025-12-08 08:00
+
+MAHA  : VENUS    | End: 2025-12-03 21:36 | Rest: 0d 2h 26m |  8.69%
+ANTAR : MERCURY  | End: 2025-12-03 21:36 | Rest: 0d 2h 26m | 61.34%
+PRATY : MARS     | End: 2025-12-03 19:17 | Rest: 0d 0h 7m | 51.62%
+SOOK  : RAHU     | End: 2025-12-03 19:11 | Rest: 0d 0h 1m | 55.25%
+SUB   : RAHU     | End: 2025-12-03 19:10 | Rest: 0d 0h 0m | 79.44%
+PRANA : VENUS    | End: 2025-12-03 19:10 | Rest: 0d 0h 0m | 11.62%
+
+----------------------------------------

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+env/
+venv/
+
+# Logs
+logs/
+*.log
+
+# Build Artifacts
+build/
+dist/
+
+# Temporary files
+tmp/
+temp/
+
+# VS Code
+.vscode/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS Files
+.DS_Store
+Thumbs.db
