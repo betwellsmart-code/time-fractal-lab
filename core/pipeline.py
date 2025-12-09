@@ -1,668 +1,367 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pipeline.py – Time-Fractal-Lab Multi-Agent Pipeline (Enterprise Version)
+time-fractal-lab – pipeline.py (v0.3)
 
-Author   : Dr. Noreki & EL_Samy (Development Lead)
+Author   : Dr. Noreki & EL_Samy
 Project  : time-fractal-lab / Saham-Lab
-Version  : v0.2.0
-Purpose  : Provides the central execution pipeline for Agents 0–12
-           including orchestration, registry, configuration, logging
-           and snapshot-friendly result structures.
+Version  : v0.3.0
 
-This module is designed to be:
-- Easy to extend (add new agents or pipelines)
-- Sandbox-compatible (no external dependencies beyond stdlib)
-- GitHub-friendly (clear structure, docstrings, type hints)
+Purpose:
+    Zentrale Pipeline-Orchestrierung für das Multi-Agenten-System.
+
+    NEU IN v0.3:
+    - Integration der AstroSnapshotEngine (Sub/SSL + Drift + Trend)
+    - Integration von TemporalSynth (Agent 5) zur Bildung von Zeitblöcken
+    - Kontextweitergabe zwischen Agenten über ein gemeinsames context-Objekt
+
+    Architektur:
+    - Agent 1–4, 6–9: Platzhalter/Stub-Agents (OK-Meldung, spätere Logik möglich)
+    - Agent 5 (TemporalSynthAgent): Echt angebunden an
+        * astro_snapshot_engine.AstroSnapshotEngine
+        * temporal_synth.TemporalSynth
 """
 
 from __future__ import annotations
 
-import abc
-import dataclasses
-import json
 import logging
-import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from astro_snapshot_engine import AstroSnapshotEngine, Candle
+from temporal_synth import TemporalSynth
 
 
 # ============================================================================
-# 0) LOGGING SETUP
+# Logging-Konfiguration
 # ============================================================================
 
-def setup_default_logging(level: int = logging.INFO) -> None:
-    """
-    Configure a simple console logger.
-    Can be called from __main__ or from external starter scripts.
-    """
-    logger = logging.getLogger("time_fractal_lab.pipeline")
-    if logger.handlers:
-        return  # Already configured
-
-    logger.setLevel(level)
-    handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter(
-        fmt="[%(asctime)s] [%(levelname)s] %(name)s :: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+logger = logging.getLogger("time_fractal_lab.pipeline")
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s :: %(message)s",
     )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-
-LOGGER = logging.getLogger("time_fractal_lab.pipeline")
 
 
 # ============================================================================
-# 1) CORE DATA STRUCTURES
+# Agenten-Grundstruktur
 # ============================================================================
 
-@dataclasses.dataclass
-class AgentConfig:
-    """
-    Configuration for a single agent.
-
-    - id: Numeric ID (0–12)
-    - name: Human-readable name (e.g. 'PatternCore')
-    - role: Short description of purpose
-    - enabled: Whether this agent is active in the pipeline
-    """
-    id: int
-    name: str
-    role: str
-    enabled: bool = True
-
-
-@dataclasses.dataclass
-class PipelineConfig:
-    """
-    Global configuration for the pipeline.
-
-    - debug_mode: If True, more verbose logs and additional debug fields
-    - collect_intermediates: If True, stores each agent's payload output
-    - default_pipeline: Default ordered list of agent IDs
-    - snapshot_dir: Optional directory for JSON snapshots
-    """
-    debug_mode: bool = True
-    collect_intermediates: bool = True
-    default_pipeline: Sequence[int] = dataclasses.field(default_factory=lambda: [
-        1, 2, 3, 4, 5, 6, 7, 8, 9  # 0 = Orchestrator, 10–12 = optional / advanced
-    ])
-    snapshot_dir: Optional[Path] = None
-
-
-@dataclasses.dataclass
-class PipelineContext:
-    """
-    Context object passed through the pipeline.
-
-    - run_id: Unique identifier for this pipeline run
-    - metadata: Arbitrary metadata (e.g. chart info, timestamps, scenario)
-    - created_at: Run start timestamp
-    """
-    run_id: str
-    metadata: Dict[str, Any]
-    created_at: datetime = dataclasses.field(default_factory=datetime.utcnow)
-
-
-@dataclasses.dataclass
+@dataclass
 class AgentResult:
-    """
-    Result of a single agent run.
-
-    - agent_id: Numeric ID (0–12)
-    - agent_name: Name of the agent
-    - success: True if no exception occurred
-    - data: Agent output payload (structured or unstructured)
-    - error: Error message if success == False
-    - started_at / finished_at: Timestamps for timing
-    """
     agent_id: int
-    agent_name: str
+    name: str
     success: bool
-    data: Any
-    error: Optional[str] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
+    details: Optional[str] = None
 
 
-@dataclasses.dataclass
-class PipelineReport:
+class BaseAgent:
     """
-    Aggregated report for a full pipeline run.
-
-    - run_id: Identifier from PipelineContext
-    - success: True if all mandatory agents succeeded
-    - results: List of AgentResults in execution order
-    - metadata: Includes context metadata and pipeline configuration
-    """
-    run_id: str
-    success: bool
-    results: List[AgentResult]
-    metadata: Dict[str, Any]
-
-
-# ============================================================================
-# 2) BASE AGENT CLASS
-# ============================================================================
-
-class AgentBase(abc.ABC):
-    """
-    Abstract base class for all agents in the Time-Fractal-Lab system.
-
-    Each agent must implement:
-    - `run(self, payload, context)` → returns output payload
-
-    Agents should:
-    - be side-effect free (or side-effects clearly documented)
-    - handle errors gracefully
-    - log internally using LOGGER
+    Basisklasse für alle Agenten.
     """
 
-    def __init__(self, config: AgentConfig) -> None:
-        self.config = config
+    def __init__(self, agent_id: int, name: str) -> None:
+        self.agent_id = agent_id
+        self.name = name
 
-    @property
-    def id(self) -> int:
-        return self.config.id
-
-    @property
-    def name(self) -> str:
-        return self.config.name
-
-    @property
-    def role(self) -> str:
-        return self.config.role
-
-    def is_enabled(self) -> bool:
-        return self.config.enabled
-
-    @abc.abstractmethod
-    def run(self, payload: Any, context: PipelineContext) -> Any:
+    def run(self, context: Dict[str, Any]) -> AgentResult:
         """
-        Execute the agent logic.
-
-        Parameters
-        ----------
-        payload : Any
-            The incoming data from previous step (or initial input).
-        context : PipelineContext
-            Shared context for the pipeline run.
-
-        Returns
-        -------
-        Any
-            The output payload to be passed to the next agent.
+        Muss von Unterklassen überschrieben werden.
         """
         raise NotImplementedError
 
 
-# ============================================================================
-# 3) CONCRETE PLACEHOLDER AGENTS 0–12
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Stub-Agenten 1–4, 6–9 (Platzhalter, liefern OK)
+# ---------------------------------------------------------------------------
 
-class OrchestratorAgent(AgentBase):
+class StubAgent(BaseAgent):
     """
-    Agent 0 – Orchestrator
-
-    High-level conductor. In this simplified version, Orchestrator does not
-    transform the payload, but can inject orchestration metadata.
+    Einfacher Platzhalter-Agent, der nur OK meldet.
+    Später können hier echte Implementierungen ergänzt werden.
     """
 
-    def run(self, payload: Any, context: PipelineContext) -> Any:
-        LOGGER.info("[Orchestrator] Starting orchestration for run_id=%s", context.run_id)
-        orchestration_info = {
-            "orchestrated_by": "OrchestratorAgent",
-            "run_id": context.run_id,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-
-        # Merge orchestration info into payload if it is a dict, otherwise wrap.
-        if isinstance(payload, dict):
-            merged = dict(payload)
-            merged["_orchestration"] = orchestration_info
-            return merged
-        else:
-            return {
-                "payload": payload,
-                "_orchestration": orchestration_info,
-            }
-
-
-class SimpleLoggingAgent(AgentBase):
-    """
-    Generic placeholder agent.
-
-    Used as a base for the simple placeholder implementations below.
-    It logs the incoming payload and appends its own marker.
-    """
-
-    def run(self, payload: Any, context: PipelineContext) -> Any:
-        LOGGER.debug(
-            "[%s] Received payload type=%s for run_id=%s",
-            self.name, type(payload).__name__, context.run_id
+    def run(self, context: Dict[str, Any]) -> AgentResult:
+        logger.info(
+            "Agent %02d [%s] – Stub läuft, keine spezifische Logik.",
+            self.agent_id,
+            self.name,
+        )
+        return AgentResult(
+            agent_id=self.agent_id,
+            name=self.name,
+            success=True,
+            details="StubAgent – OK",
         )
 
-        marker = {
-            "agent_id": self.id,
-            "agent_name": self.name,
-            "role": self.role,
-            "run_timestamp": datetime.utcnow().isoformat(),
-        }
-
-        if isinstance(payload, dict):
-            out = dict(payload)
-            out.setdefault("_trace", [])
-            out["_trace"].append(marker)
-            return out
-        else:
-            return {
-                "payload": payload,
-                "_trace": [marker],
-            }
-
-
-# Define concrete agents via subclassing SimpleLoggingAgent
-class PatternCoreAgent(SimpleLoggingAgent):
-    pass
-
-
-class StructureWeaverAgent(SimpleLoggingAgent):
-    pass
-
-
-class PointEngineAgent(SimpleLoggingAgent):
-    pass
-
-
-class PointDynamicsAgent(SimpleLoggingAgent):
-    pass
-
-
-class TemporalSynthAgent(SimpleLoggingAgent):
-    pass
-
-
-class DriftAgent(SimpleLoggingAgent):
-    pass
-
-
-class GuardianCoreAgent(SimpleLoggingAgent):
-    pass
-
-
-class TrendAgent(SimpleLoggingAgent):
-    pass
-
-
-class ForecastAgent(SimpleLoggingAgent):
-    pass
-
-
-class ClusterAgent(SimpleLoggingAgent):
-    pass
-
-
-class SignatureAgent(SimpleLoggingAgent):
-    pass
-
-
-class HorizonAgent(SimpleLoggingAgent):
-    pass
-
 
 # ============================================================================
-# 4) AGENT REGISTRY
+# Agent 5 – TemporalSynth (echte Logik)
 # ============================================================================
 
-class AgentRegistry:
+class TemporalSynthAgent(BaseAgent):
     """
-    Central registry that holds all agent instances by their IDs.
+    Agent 5 – nutzt AstroSnapshotEngine und TemporalSynth, um aus
+    Kerzen- und Astro-Daten Zeitblöcke abzuleiten.
 
-    Responsibilities:
-    - instantiate all known agents with their configs
-    - provide lookup by ID or by name
-    - allow easy extension by adding new agents
+    Erwartet im context optional:
+        - 'candles': List[Candle]
+          Wenn nicht vorhanden, erzeugt der Agent Demo-Kerzen (M1, 10 Minuten).
+
+    Schreibt in den context:
+        - 'snapshots': Liste von SnapshotRecord-Objekten
+        - 'temporal_blocks': Liste von TemporalBlock-Objekten
     """
 
-    def __init__(self, config: Optional[PipelineConfig] = None) -> None:
-        self.config = config or PipelineConfig()
-        self._agents_by_id: Dict[int, AgentBase] = {}
-        self._initialize_default_agents()
+    def __init__(self, agent_id: int = 5, name: str = "TemporalSynth") -> None:
+        super().__init__(agent_id, name)
+        self.snapshot_engine = AstroSnapshotEngine()
+        self.temporal_synth = TemporalSynth()
 
-    def _initialize_default_agents(self) -> None:
+    def _build_demo_candles(self) -> List[Candle]:
         """
-        Instantiate all 13 agents 0–12 with basic roles.
+        Erzeugt eine kleine Demo-Serie von M1-Kerzen, falls keine
+        Marktdaten im Kontext vorhanden sind.
         """
+        base_ts = datetime(2025, 1, 1, 12, 0, 0)
+        candles: List[Candle] = []
+        price = 11.0
 
-        def add(agent: AgentBase) -> None:
-            self._agents_by_id[agent.id] = agent
+        for i in range(10):
+            ts = base_ts + timedelta(minutes=i)
+            o = price
+            # einfache alternierende Bewegung
+            c = price + (0.01 if i % 2 == 0 else -0.015)
+            h = max(o, c) + 0.005
+            l = min(o, c) - 0.005
+            price = c
 
-        # 0 – Orchestrator
-        add(OrchestratorAgent(AgentConfig(
-            id=0,
-            name="Orchestrator",
-            role="Central coordination of the agent pipeline",
-        )))
+            candles.append(
+                Candle(
+                    timestamp=ts,
+                    tf="M1",
+                    open=o,
+                    high=h,
+                    low=l,
+                    close=c,
+                )
+            )
 
-        # 1–12 – Core agents
-        add(PatternCoreAgent(AgentConfig(
-            id=1,
-            name="PatternCore",
-            role="Extracts patterns from numerical and symbolic data.",
-        )))
-        add(StructureWeaverAgent(AgentConfig(
-            id=2,
-            name="StructureWeaver",
-            role="Weaves patterns into higher-level structures.",
-        )))
-        add(PointEngineAgent(AgentConfig(
-            id=3,
-            name="PointEngine",
-            role="Works with points, KP points, Keno points.",
-        )))
-        add(PointDynamicsAgent(AgentConfig(
-            id=4,
-            name="PointDynamics",
-            role="Analyses dynamics, changes, and movement between points.",
-        )))
-        add(TemporalSynthAgent(AgentConfig(
-            id=5,
-            name="TemporalSynth",
-            role="Builds temporal and fractal time models.",
-        )))
-        add(DriftAgent(AgentConfig(
-            id=6,
-            name="DriftAgent",
-            role="Monitors temporal and structural drift.",
-        )))
-        add(GuardianCoreAgent(AgentConfig(
-            id=7,
-            name="GuardianCore",
-            role="Quality and stability monitoring.",
-        )))
-        add(TrendAgent(AgentConfig(
-            id=8,
-            name="TrendAgent",
-            role="Detects medium- and long-range trends.",
-        )))
-        add(ForecastAgent(AgentConfig(
-            id=9,
-            name="ForecastAgent",
-            role="Generates forecasts based on trends and structures.",
-        )))
-        add(ClusterAgent(AgentConfig(
-            id=10,
-            name="ClusterAgent",
-            role="Forms clusters of patterns, points or outputs.",
-        )))
-        add(SignatureAgent(AgentConfig(
-            id=11,
-            name="SignatureAgent",
-            role="Builds mathematical or symbolic signatures.",
-        )))
-        add(HorizonAgent(AgentConfig(
-            id=12,
-            name="HorizonAgent",
-            role="Determines ranges, limits, and time horizons.",
-        )))
+        return candles
 
-    # -- registry API -----------------------------------------------------
+    def run(self, context: Dict[str, Any]) -> AgentResult:
+        logger.info(
+            "Agent %02d [%s] – TemporalSynth startet Analyse.",
+            self.agent_id,
+            self.name,
+        )
 
-    def get(self, agent_id: int) -> AgentBase:
-        if agent_id not in self._agents_by_id:
-            raise KeyError(f"Agent with id={agent_id} not found in registry.")
-        return self._agents_by_id[agent_id]
+        # 1) Kerzenquelle bestimmen
+        candles: Optional[List[Candle]] = context.get("candles")
+        if not candles:
+            logger.info(
+                "Agent %02d [%s] – keine Kerzen im Kontext, "
+                "verwende Demo-M1-Serie.",
+                self.agent_id,
+                self.name,
+            )
+            candles = self._build_demo_candles()
+            context["candles"] = candles
 
-    def get_optional(self, agent_id: int) -> Optional[AgentBase]:
-        return self._agents_by_id.get(agent_id)
+        # 2) Astro-Snapshots bauen
+        snapshots = self.snapshot_engine.build_snapshots(candles)
+        context["snapshots"] = snapshots
+        logger.info(
+            "Agent %02d [%s] – %d Snapshots erzeugt.",
+            self.agent_id,
+            self.name,
+            len(snapshots),
+        )
 
-    def list_agents(self) -> List[AgentBase]:
-        return list(self._agents_by_id.values())
+        # 3) Temporal Blocks berechnen
+        blocks = self.temporal_synth.analyze(snapshots)
+        context["temporal_blocks"] = blocks
+        logger.info(
+            "Agent %02d [%s] – %d Temporal Blocks erzeugt.",
+            self.agent_id,
+            self.name,
+            len(blocks),
+        )
 
-    def list_enabled(self) -> List[AgentBase]:
-        return [a for a in self._agents_by_id.values() if a.is_enabled()]
+        return AgentResult(
+            agent_id=self.agent_id,
+            name=self.name,
+            success=True,
+            details=f"{len(blocks)} Temporal Blocks erzeugt",
+        )
 
 
 # ============================================================================
-# 5) PIPELINE EXECUTION ENGINE
+# Agenten-Registry
 # ============================================================================
+
+def build_agent_registry() -> Dict[int, BaseAgent]:
+    """
+    Baut die Agenten-Registry mit IDs 1–9.
+
+    1: PatternCore
+    2: StructureWeaver
+    3: PointEngine
+    4: PointDynamics
+    5: TemporalSynth (ECHT)
+    6: DriftAgent (Stub)
+    7: GuardianCore (Stub)
+    8: TrendAgent (Stub)
+    9: ForecastAgent (Stub)
+    """
+    registry: Dict[int, BaseAgent] = {
+        1: StubAgent(1, "PatternCore"),
+        2: StubAgent(2, "StructureWeaver"),
+        3: StubAgent(3, "PointEngine"),
+        4: StubAgent(4, "PointDynamics"),
+        5: TemporalSynthAgent(),
+        6: StubAgent(6, "DriftAgent"),
+        7: StubAgent(7, "GuardianCore"),
+        8: StubAgent(8, "TrendAgent"),
+        9: StubAgent(9, "ForecastAgent"),
+    }
+    return registry
+
+
+# ============================================================================
+# Pipeline-Runner
+# ============================================================================
+
+@dataclass
+class PipelineResult:
+    run_id: str
+    success: bool
+    agent_results: List[AgentResult]
+    context: Dict[str, Any]
+
 
 class PipelineRunner:
     """
-    PipelineRunner executes a sequence of agents on a given payload.
-
-    It:
-    - uses AgentRegistry to resolve agent instances
-    - executes them in order
-    - handles errors without killing the entire run
-    - records AgentResult objects
-    - can emit snapshot files for later analysis
+    Orchestriert einen Pipeline-Lauf mit ausgewählten Agenten.
     """
 
-    def __init__(
+    def __init__(self, agent_registry: Optional[Dict[int, BaseAgent]] = None) -> None:
+        self.agent_registry = agent_registry or build_agent_registry()
+
+    def run(
         self,
-        registry: Optional[AgentRegistry] = None,
-        config: Optional[PipelineConfig] = None,
-    ) -> None:
-        self.config = config or PipelineConfig()
-        self.registry = registry or AgentRegistry(self.config)
+        agents: Optional[List[int]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+    ) -> PipelineResult:
+        if agents is None:
+            agents = list(self.agent_registry.keys())
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
+        ctx: Dict[str, Any] = context or {}
+        run_id = run_id or f"run-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
-    def run_pipeline(
-        self,
-        pipeline: Optional[Sequence[int]],
-        initial_payload: Any,
-        context: PipelineContext,
-        mandatory_agents: Optional[Sequence[int]] = None,
-    ) -> PipelineReport:
-        """
-        Execute the given pipeline (sequence of agent IDs).
-
-        Parameters
-        ----------
-        pipeline : Sequence[int] or None
-            Ordered list of agent IDs. If None, use config.default_pipeline.
-        initial_payload : Any
-            Incoming data fed into the first agent.
-        context : PipelineContext
-            Shared context object.
-        mandatory_agents : Sequence[int], optional
-            Agents which must succeed for success=True in the report.
-
-        Returns
-        -------
-        PipelineReport
-        """
-        if pipeline is None:
-            pipeline = list(self.config.default_pipeline)
-
-        if mandatory_agents is None:
-            mandatory_agents = list(pipeline)
-
-        LOGGER.info(
+        logger.info(
             "Starting pipeline run_id=%s with agents=%s",
-            context.run_id, list(pipeline)
+            run_id,
+            agents,
         )
 
-        results: List[AgentResult] = []
-        payload = initial_payload
+        agent_results: List[AgentResult] = []
+        success = True
 
-        for agent_id in pipeline:
-            agent = self.registry.get_optional(agent_id)
+        for agent_id in agents:
+            agent = self.agent_registry.get(agent_id)
             if agent is None:
-                LOGGER.error("Agent %s not found in registry – skipping.", agent_id)
-                results.append(AgentResult(
-                    agent_id=agent_id,
-                    agent_name=f"UNKNOWN-{agent_id}",
-                    success=False,
-                    data=None,
-                    error="Agent not registered.",
-                ))
+                logger.error("Agent ID %s nicht in Registry vorhanden.", agent_id)
+                agent_results.append(
+                    AgentResult(
+                        agent_id=agent_id,
+                        name="UNKNOWN",
+                        success=False,
+                        details="Agent nicht gefunden",
+                    )
+                )
+                success = False
                 continue
-
-            if not agent.is_enabled():
-                LOGGER.info("Agent %s (%s) disabled – skipping.",
-                            agent.id, agent.name)
-                continue
-
-            LOGGER.debug("Running agent %s (%s)", agent.id, agent.name)
-
-            result = AgentResult(
-                agent_id=agent.id,
-                agent_name=agent.name,
-                success=False,
-                data=None,
-                started_at=datetime.utcnow(),
-            )
 
             try:
-                payload = agent.run(payload, context)
-                result.success = True
-                result.data = payload
-                result.error = None
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.exception(
-                    "Agent %s (%s) raised an exception.",
-                    agent.id, agent.name
+                result = agent.run(ctx)
+                agent_results.append(result)
+                status_text = "OK" if result.success else "FAILED"
+                logger.info(
+                    "Agent %02d [%s]: %s (%s)",
+                    agent.agent_id,
+                    agent.name,
+                    status_text,
+                    result.details or "",
                 )
-                result.success = False
-                result.error = f"{type(exc).__name__}: {exc!s}"
+                if not result.success:
+                    success = False
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Agent %02d [%s] – Exception: %s",
+                    agent.agent_id,
+                    agent.name,
+                    exc,
+                )
+                agent_results.append(
+                    AgentResult(
+                        agent_id=agent.agent_id,
+                        name=agent.name,
+                        success=False,
+                        details=str(exc),
+                    )
+                )
+                success = False
 
-                # In debug mode we keep payload as-is for inspection
-                if self.config.debug_mode:
-                    result.data = payload
-                else:
-                    result.data = None
-
-            result.finished_at = datetime.utcnow()
-            results.append(result)
-
-        success = all(
-            (r.success for r in results if r.agent_id in mandatory_agents)
-        )
-
-        report = PipelineReport(
-            run_id=context.run_id,
-            success=success,
-            results=results,
-            metadata={
-                "context_metadata": context.metadata,
-                "config": dataclasses.asdict(self.config),
-                "pipeline": list(pipeline),
-                "created_at": context.created_at.isoformat(),
-                "finished_at": datetime.utcnow().isoformat(),
-            },
-        )
-
-        if self.config.snapshot_dir is not None:
-            self._write_snapshot(report)
-
-        LOGGER.info(
+        logger.info(
             "Pipeline run_id=%s finished – success=%s",
-            context.run_id, success
+            run_id,
+            success,
         )
-        return report
 
-    # ------------------------------------------------------------------ #
-    # Snapshot handling
-    # ------------------------------------------------------------------ #
-
-    def _write_snapshot(self, report: PipelineReport) -> None:
-        """
-        Write a JSON snapshot of the pipeline report to snapshot_dir/run_id.json
-        """
-        snapshot_dir = self.config.snapshot_dir
-        if snapshot_dir is None:
-            return
-
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        path = snapshot_dir / f"{report.run_id}.json"
-
-        def serialize_agent_result(res: AgentResult) -> Dict[str, Any]:
-            return {
-                "agent_id": res.agent_id,
-                "agent_name": res.agent_name,
-                "success": res.success,
-                "data": res.data if self.config.collect_intermediates else None,
-                "error": res.error,
-                "started_at": res.started_at.isoformat() if res.started_at else None,
-                "finished_at": res.finished_at.isoformat() if res.finished_at else None,
-            }
-
-        obj = {
-            "run_id": report.run_id,
-            "success": report.success,
-            "results": [serialize_agent_result(r) for r in report.results],
-            "metadata": report.metadata,
-        }
-
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=2)
-
-        LOGGER.info("Snapshot written to %s", path)
+        return PipelineResult(
+            run_id=run_id,
+            success=success,
+            agent_results=agent_results,
+            context=ctx,
+        )
 
 
 # ============================================================================
-# 6) SIMPLE CONVENIENCE ENTRY POINT
+# Demo-Einstiegspunkt
 # ============================================================================
 
-def generate_run_id(prefix: str = "run") -> str:
+def _demo() -> None:
     """
-    Generate a simple run_id based on timestamp.
+    Einfacher Demo-Lauf:
+
+    - Läuft alle Agenten 1–9 durch.
+    - Lässt TemporalSynth echte Zeitblöcke berechnen.
+    - Gibt eine kompakte Zusammenfassung auf stdout aus.
     """
-    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
-    return f"{prefix}-{ts}"
+    runner = PipelineRunner()
+    result = runner.run()
 
+    print(f"Run {result.run_id} – success={result.success}")
+    for ar in result.agent_results:
+        status = "OK" if ar.success else "FAILED"
+        print(f"  - Agent {ar.agent_id:02d} [{ar.name}]: {status} ({ar.details or ''})")
 
-def demo_run() -> None:
-    """
-    Minimal demo run for manual testing.
-
-    You can invoke this by running:
-    `python pipeline.py`
-
-    It will:
-    - create a default PipelineRunner
-    - run the default pipeline (1–9)
-    - print a compact summary to stdout
-    """
-    setup_default_logging(logging.INFO)
-
-    cfg = PipelineConfig(
-        debug_mode=True,
-        collect_intermediates=True,
-        snapshot_dir=None,  # Optional: Path("snapshots")
-    )
-
-    registry = AgentRegistry(cfg)
-    runner = PipelineRunner(registry=registry, config=cfg)
-
-    context = PipelineContext(
-        run_id=generate_run_id("demo"),
-        metadata={"scenario": "demo", "source": "pipeline.py"},
-    )
-
-    initial_payload: Dict[str, Any] = {
-        "note": "Initial payload for demo run.",
-    }
-
-    report = runner.run_pipeline(
-        pipeline=None,  # use default from cfg
-        initial_payload=initial_payload,
-        context=context,
-    )
-
-    # Compact summary on stdout
-    print(f"Run {report.run_id} – success={report.success}")
-    for res in report.results:
-        status = "OK" if res.success else "FAIL"
-        print(f"  - Agent {res.agent_id:02d} [{res.agent_name}]: {status}")
+    # Wenn TemporalSynth gelaufen ist, gibt es 'temporal_blocks' im Kontext
+    blocks = result.context.get("temporal_blocks") or []
+    print(f"\nTemporal Blocks: {len(blocks)}")
+    for b in blocks:
+        bd = b.to_dict()
+        print(
+            f"    Block {bd['block_id']} | {bd['start']} → {bd['end']} "
+            f"| dur={bd['duration_min']}m | sub={bd['sub']} ssl={bd['ssl']} "
+            f"| trend={bd['trend_bias']} | vol={bd['volatility']:.5f}"
+        )
 
 
 if __name__ == "__main__":
-    demo_run()
+    _demo()
